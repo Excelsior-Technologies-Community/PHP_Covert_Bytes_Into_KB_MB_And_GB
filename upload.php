@@ -5,22 +5,23 @@
  *
  * This file contains reusable file-analysis functionality.
  */
-
 function analyzeUploadedFile($file)
 {
     if (!isset($file) || !is_array($file)) {
         throw new Exception('No file was provided.');
     }
 
-    if ($file['error'] !== UPLOAD_ERR_OK) {
+    if (!isset($file['error']) || $file['error'] !== UPLOAD_ERR_OK) {
         throw new Exception('File upload failed.');
     }
 
     // 100 MB limit.
     $maxSize = 100 * 1024 * 1024;
 
-    if ($file['size'] > $maxSize) {
-        throw new Exception('Maximum allowed file size is 100 MB.');
+    if ((int) $file['size'] > $maxSize) {
+        throw new Exception(
+            'Maximum allowed file size is 100 MB.'
+        );
     }
 
     $size = (int) $file['size'];
@@ -51,7 +52,7 @@ function formatFileSize($bytes, $precision = 2)
         'PB'
     ];
 
-    $bytes = max(0, $bytes);
+    $bytes = max(0, (float) $bytes);
 
     $index = 0;
 
