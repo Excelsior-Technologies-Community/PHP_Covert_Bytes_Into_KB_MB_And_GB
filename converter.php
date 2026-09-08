@@ -5,7 +5,7 @@
  *
  * Uses 1024-based conversion.
  */
-function convertDataSize($value, $fromUnit, $toUnit)
+function convertDataSize($value, $fromUnit, $toUnit, $precision = 6)
 {
     $units = [
         'B'  => 1,
@@ -24,7 +24,17 @@ function convertDataSize($value, $fromUnit, $toUnit)
         throw new InvalidArgumentException('Invalid value.');
     }
 
+    $precision = (int) $precision;
+
+    if ($precision < 0) {
+        $precision = 0;
+    }
+
+    if ($precision > 8) {
+        $precision = 8;
+    }
+
     $bytes = (float) $value * $units[$fromUnit];
 
-    return round($bytes / $units[$toUnit], 6);
+    return round($bytes / $units[$toUnit], $precision);
 }
