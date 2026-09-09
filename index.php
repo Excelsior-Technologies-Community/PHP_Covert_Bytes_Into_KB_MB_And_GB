@@ -18,7 +18,16 @@ $units = [
     'GB' => 1024 ** 3,
     'TB' => 1024 ** 4,
     'PB' => 1024 ** 5,
+    'b'  => 1,
+    'Kb' => 1024,
+    'Mb' => 1024 ** 2,
+    'Gb' => 1024 ** 3,
+    'Tb' => 1024 ** 4,
+    'Pb' => 1024 ** 5,
 ];
+
+$byteUnits = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+$bitUnits = ['b', 'Kb', 'Mb', 'Gb', 'Tb', 'Pb'];
 
 
 /*
@@ -134,6 +143,12 @@ $fileResult = null;
 
 $precision = 6;
 
+$conversionMode = 'binary';
+
+$isBinary = true;
+
+$allUnitsResult = null;
+
 
 /*
 |--------------------------------------------------------------------------
@@ -178,6 +193,50 @@ if (
 
         $messageType =
             'success';
+    }
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Bulk Delete History
+|--------------------------------------------------------------------------
+*/
+
+if (
+    $_SERVER['REQUEST_METHOD'] === 'POST' &&
+    isset($_POST['bulk_delete_history'])
+) {
+    if (
+        !isset($_POST['csrf_token']) ||
+        !hash_equals(
+            $_SESSION['csrf_token'],
+            $_POST['csrf_token']
+        )
+    ) {
+        $message = 'Invalid security token.';
+        $messageType = 'error';
+    } else {
+        $deleteIds = $_POST['history_ids'] ?? [];
+
+        if (!empty($deleteIds) && isset($_SESSION['conversion_history'])) {
+            $_SESSION['conversion_history'] =
+                array_values(
+                    array_filter(
+                        $_SESSION['conversion_history'],
+                        function ($item) use ($deleteIds) {
+                            return !in_array(
+                                $item['id'] ?? '',
+                                $deleteIds,
+                                true
+                            );
+                        }
+                    )
+                );
+        }
+
+        $message = 'Selected history records deleted.';
+        $messageType = 'success';
     }
 }
 
@@ -252,6 +311,51 @@ if (
 
 /*
 |--------------------------------------------------------------------------
+| Download JSON
+|--------------------------------------------------------------------------
+*/
+
+if (
+    $_SERVER['REQUEST_METHOD'] === 'POST' &&
+    isset($_POST['download_json'])
+) {
+
+    if (
+        !isset($_POST['csrf_token']) ||
+        !hash_equals(
+            $_SESSION['csrf_token'],
+            $_POST['csrf_token']
+        )
+    ) {
+        die('Invalid security token.');
+    }
+
+    $history =
+        getConversionHistory();
+
+    header(
+        'Content-Type: application/json; charset=utf-8'
+    );
+
+    header(
+        'Content-Disposition: attachment; filename="conversion-history.json"'
+    );
+
+    echo json_encode(
+        [
+            'exported_at' => date('c'),
+            'total_records' => count($history),
+            'history' => $history,
+        ],
+        JSON_PRETTY_PRINT
+    );
+
+    exit;
+}
+
+
+/*
+|--------------------------------------------------------------------------
 | Normal Conversion
 |--------------------------------------------------------------------------
 */
@@ -274,6 +378,11 @@ if (
         (int) (
             $_POST['precision'] ?? 6
         );
+
+    $conversionMode =
+        $_POST['conversion_mode'] ?? 'binary';
+
+    $isBinary = ($conversionMode !== 'si');
 
     if ($precision < 0) {
         $precision = 0;
@@ -313,7 +422,8 @@ if (
                     $value,
                     $from,
                     $to,
-                    $precision
+                    $precision,
+                    $isBinary
                 );
 
             $conversionResult = [
@@ -322,6 +432,14 @@ if (
                 'result' => $result,
                 'to' => $to,
             ];
+
+            $allUnitsResult =
+                convertToAllUnits(
+                    $value,
+                    $from,
+                    $precision,
+                    $isBinary
+                );
 
             addToHistory(
                 $value,
@@ -426,6 +544,30 @@ if (
                 $fileSize /
                     $units['PB'],
                 10
+            ),
+
+            'bits' =>
+            $fileSize * 8,
+
+            'Kb' =>
+            round(
+                $fileSize * 8 /
+                    $units['Kb'],
+                2
+            ),
+
+            'Mb' =>
+            round(
+                $fileSize * 8 /
+                    $units['Mb'],
+                4
+            ),
+
+            'Gb' =>
+            round(
+                $fileSize * 8 /
+                    $units['Gb'],
+                6
             ),
 
             'type' =>
@@ -797,7 +939,6 @@ if (
                     name="csrf_token"
                     value="<?= e($_SESSION['csrf_token']) ?>">
 
-
                 <div class="converter-grid">
 
 
@@ -825,6 +966,47 @@ if (
                                 required>
 
                         </div>
+
+                    </div>
+
+
+                    <!-- MODE -->
+
+                    <div class="form-group mode-group">
+
+                        <label>
+                            Mode
+                        </label>
+
+                        <div class="mode-toggle">
+
+                            <button
+                                type="button"
+                                class="mode-btn active"
+                                data-mode="binary"
+                                onclick="setMode('binary')">
+
+                                Binary (1024)
+
+                            </button>
+
+                            <button
+                                type="button"
+                                class="mode-btn"
+                                data-mode="si"
+                                onclick="setMode('si')">
+
+                                SI (1000)
+
+                            </button>
+
+                        </div>
+
+                        <input
+                            type="hidden"
+                            name="conversion_mode"
+                            id="conversion_mode"
+                            value="binary">
 
                     </div>
 
@@ -912,6 +1094,57 @@ if (
                     </div>
 
 
+                    <!-- PRESETS -->
+
+                    <div class="form-group presets-group">
+
+                        <label>
+                            Quick Presets
+                        </label>
+
+                        <div class="presets-list">
+
+                            <button
+                                type="button"
+                                class="preset-btn"
+                                onclick="applyPreset(1, 'GB', 'MB')">
+
+                                1 GB = ?
+
+                            </button>
+
+                            <button
+                                type="button"
+                                class="preset-btn"
+                                onclick="applyPreset(100, 'MB', 'KB')">
+
+                                100 MB = ?
+
+                            </button>
+
+                            <button
+                                type="button"
+                                class="preset-btn"
+                                onclick="applyPreset(1, 'TB', 'GB')">
+
+                                1 TB = ?
+
+                            </button>
+
+                            <button
+                                type="button"
+                                class="preset-btn"
+                                onclick="applyPreset(500, 'MB', 'B')">
+
+                                500 MB = ?
+
+                            </button>
+
+                        </div>
+
+                    </div>
+
+
                     <!-- PRECISION -->
 
                     <div class="form-group precision-group">
@@ -935,6 +1168,7 @@ if (
                             <option
                                 value="6"
                                 selected>
+
                                 6 decimals
                             </option>
 
@@ -1021,6 +1255,306 @@ if (
 
                 </div>
 
+
+                <?php if ($allUnitsResult): ?>
+
+                    <div class="all-units-panel" id="allUnitsPanel">
+
+                        <h3>
+                            All Units
+                        </h3>
+
+                        <div class="all-units-grid">
+
+                            <?php foreach (
+                                $allUnitsResult
+                                as $unit => $val
+                            ): ?>
+
+                                <div class="unit-chip">
+
+                                    <span class="unit-label">
+                                        <?= e($unit) ?>
+                                    </span>
+
+                                    <strong>
+                                        <?= e(
+                                            $val !== null
+                                                ? number_format(
+                                                    $val,
+                                                    $precision
+                                                )
+                                                : '—'
+                                        ) ?>
+                                    </strong>
+
+                                </div>
+
+                            <?php endforeach; ?>
+
+                        </div>
+
+                    </div>
+
+                <?php endif; ?>
+
+            <?php endif; ?>
+
+        </section>
+
+
+        <!-- COMPARISON TOOL -->
+
+        <section class="card compare-card">
+
+            <div class="section-title">
+
+                <div class="section-icon orange-bg">
+                    ⚖️
+                </div>
+
+                <div>
+
+                    <h2>
+                        Size Comparison
+                    </h2>
+
+                    <p>
+                        Compare two data sizes side-by-side.
+                    </p>
+
+                </div>
+
+            </div>
+
+
+            <form
+                method="POST"
+                id="compareForm">
+
+                <input
+                    type="hidden"
+                    name="csrf_token"
+                    value="<?= e($_SESSION['csrf_token']) ?>">
+
+                <div class="compare-grid">
+
+                    <div class="form-group">
+
+                        <label for="compare_value_a">
+                            Size A
+                        </label>
+
+                        <div class="compare-inputs">
+
+                            <input
+                                type="number"
+                                id="compare_value_a"
+                                name="compare_value_a"
+                                min="0"
+                                step="any"
+                                placeholder="Value"
+                                required>
+
+                            <select
+                                name="compare_unit_a"
+                                id="compare_unit_a">
+
+                                <?php foreach (
+                                    $units as $unit => $multiplier
+                                ): ?>
+
+                                    <option
+                                        value="<?= e($unit) ?>">
+
+                                        <?= e($unit) ?>
+
+                                    </option>
+
+                                <?php endforeach; ?>
+
+                            </select>
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="compare-divider">
+                        <span>VS</span>
+                    </div>
+
+
+                    <div class="form-group">
+
+                        <label for="compare_value_b">
+                            Size B
+                        </label>
+
+                        <div class="compare-inputs">
+
+                            <input
+                                type="number"
+                                id="compare_value_b"
+                                name="compare_value_b"
+                                min="0"
+                                step="any"
+                                placeholder="Value"
+                                required>
+
+                            <select
+                                name="compare_unit_b"
+                                id="compare_unit_b">
+
+                                <?php foreach (
+                                    $units as $unit => $multiplier
+                                ): ?>
+
+                                    <option
+                                        value="<?= e($unit) ?>">
+
+                                        <?= e($unit) ?>
+
+                                    </option>
+
+                                <?php endforeach; ?>
+
+                            </select>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <button
+                    type="submit"
+                    name="compare"
+                    class="primary-btn compare-btn">
+
+                    <span>
+                        ⚖️
+                    </span>
+
+                    Compare Sizes
+
+                </button>
+
+            </form>
+
+
+            <?php if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['compare'])): ?>
+
+                <?php
+                $compareA = $_POST['compare_value_a'] ?? '';
+                $compareUnitA = $_POST['compare_unit_a'] ?? 'B';
+                $compareB = $_POST['compare_value_b'] ?? '';
+                $compareUnitB = $_POST['compare_unit_b'] ?? 'B';
+
+                $compareResultA = null;
+                $compareResultB = null;
+                $compareWinner = '';
+
+                if (
+                    is_numeric($compareA) &&
+                    is_numeric($compareB) &&
+                    (float) $compareA >= 0 &&
+                    (float) $compareB >= 0
+                ) {
+                    $compareResultA = convertDataSize(
+                        $compareA,
+                        $compareUnitA,
+                        'B',
+                        2,
+                        $isBinary
+                    );
+
+                    $compareResultB = convertDataSize(
+                        $compareB,
+                        $compareUnitB,
+                        'B',
+                        2,
+                        $isBinary
+                    );
+
+                    if ($compareResultA > $compareResultB) {
+                        $compareWinner = 'A';
+                    } elseif ($compareResultB > $compareResultA) {
+                        $compareWinner = 'B';
+                    } else {
+                        $compareWinner = 'tie';
+                    }
+                }
+                ?>
+
+
+                <?php if ($compareResultA !== null && $compareResultB !== null): ?>
+
+                    <div class="compare-result">
+
+                        <div class="compare-item <?= $compareWinner === 'A' ? 'winner' : '' ?>">
+
+                            <span class="compare-label">
+                                Size A
+                            </span>
+
+                            <strong>
+                                <?= e($compareA) ?> <?= e($compareUnitA) ?>
+                            </strong>
+
+                            <span class="compare-bytes">
+                                <?= e(number_format($compareResultA, 2)) ?> B
+                            </span>
+
+                        </div>
+
+
+                        <div class="compare-vs">
+                            <span>VS</span>
+                        </div>
+
+
+                        <div class="compare-item <?= $compareWinner === 'B' ? 'winner' : '' ?>">
+
+                            <span class="compare-label">
+                                Size B
+                            </span>
+
+                            <strong>
+                                <?= e($compareB) ?> <?= e($compareUnitB) ?>
+                            </strong>
+
+                            <span class="compare-bytes">
+                                <?= e(number_format($compareResultB, 2)) ?> B
+                            </span>
+
+                        </div>
+
+                    </div>
+
+                    <?php if ($compareWinner === 'tie'): ?>
+
+                        <div class="compare-tie">
+                            Both sizes are equal.
+                        </div>
+
+                    <?php elseif ($compareWinner === 'A'): ?>
+
+                        <div class="compare-conclusion">
+                            Size A is larger.
+                        </div>
+
+                    <?php else: ?>
+
+                        <div class="compare-conclusion">
+                            Size B is larger.
+                        </div>
+
+                    <?php endif; ?>
+
+                <?php endif; ?>
+
             <?php endif; ?>
 
         </section>
@@ -1061,14 +1595,14 @@ if (
                     value="<?= e($_SESSION['csrf_token']) ?>">
 
 
-                <div class="upload-area">
+                <div class="upload-area" id="uploadArea">
 
                     <div class="upload-icon">
                         📤
                     </div>
 
                     <h3>
-                        Select a file
+                        Select or drop a file
                     </h3>
 
                     <p>
@@ -1079,7 +1613,8 @@ if (
                         type="file"
                         name="file"
                         id="file"
-                        required>
+                        required
+                        onchange="handleFileSelect(this)">
 
                 </div>
 
@@ -1192,6 +1727,46 @@ if (
                         </div>
 
                         <div>
+                            <span>Bits</span>
+                            <strong>
+                                <?= e(
+                                    $fileResult['bits']
+                                ) ?>
+                                b
+                            </strong>
+                        </div>
+
+                        <div>
+                            <span>Kilobits</span>
+                            <strong>
+                                <?= e(
+                                    $fileResult['Kb']
+                                ) ?>
+                                Kb
+                            </strong>
+                        </div>
+
+                        <div>
+                            <span>Megabits</span>
+                            <strong>
+                                <?= e(
+                                    $fileResult['Mb']
+                                ) ?>
+                                Mb
+                            </strong>
+                        </div>
+
+                        <div>
+                            <span>Gigabits</span>
+                            <strong>
+                                <?= e(
+                                    $fileResult['Gb']
+                                ) ?>
+                                Gb
+                            </strong>
+                        </div>
+
+                        <div>
                             <span>File Extension</span>
                             <strong>
                                 <?= e(
@@ -1249,6 +1824,59 @@ if (
 
                     <div class="history-actions">
 
+                        <!-- SELECT ALL -->
+
+                        <label class="select-all-label">
+
+                            <input
+                                type="checkbox"
+                                id="selectAllHistory"
+                                onchange="toggleSelectAll(this)">
+
+                            <span>
+                                Select All
+                            </span>
+
+                        </label>
+
+
+                        <!-- JSON -->
+
+                        <form
+                            method="POST"
+                            class="csv-form"
+                            id="jsonExportForm">
+
+                            <input
+                                type="hidden"
+                                name="csrf_token"
+                                value="<?= e(
+                                            $_SESSION['csrf_token']
+                                        ) ?>">
+
+                            <input
+                                type="hidden"
+                                name="download_json"
+                                value="1">
+
+                            <button
+                                type="submit"
+                                name="download_json"
+                                class="csv-btn json-btn">
+
+                                <span>
+                                    📥
+                                </span>
+
+                                <span>
+                                    Download JSON
+                                </span>
+
+                            </button>
+
+                        </form>
+
+
                         <!-- CSV -->
 
                         <form
@@ -1273,6 +1901,44 @@ if (
 
                                 <span>
                                     Download CSV
+                                </span>
+
+                            </button>
+
+                        </form>
+
+
+                        <!-- BULK DELETE -->
+
+                        <form
+                            method="POST"
+                            id="bulkDeleteForm"
+                            onsubmit="return confirmBulkDelete();">
+
+                            <input
+                                type="hidden"
+                                name="csrf_token"
+                                value="<?= e(
+                                            $_SESSION['csrf_token']
+                                        ) ?>">
+
+                            <input
+                                type="hidden"
+                                name="bulk_delete_history"
+                                value="1">
+
+                            <button
+                                type="submit"
+                                class="clear-btn bulk-delete-btn"
+                                id="bulkDeleteBtn"
+                                disabled>
+
+                                <span>
+                                    🗑️
+                                </span>
+
+                                <span>
+                                    Delete Selected
                                 </span>
 
                             </button>
@@ -1394,11 +2060,20 @@ if (
 
                         <thead>
 
-                            <tr>
+                                <tr>
 
-                                <th>
-                                    #
-                                </th>
+                                    <th>
+
+                                        <input
+                                            type="checkbox"
+                                            id="historySelectAll"
+                                            onchange="toggleSelectAll(this)">
+
+                                    </th>
+
+                                    <th>
+                                        #
+                                    </th>
 
                                 <th>
                                     Value
@@ -1421,7 +2096,7 @@ if (
                         </thead>
 
 
-                        <tbody>
+                        <tbody class="history-table-body">
 
                             <?php
                             $rowNumber = 1;
@@ -1432,17 +2107,30 @@ if (
                                 as $item
                             ): ?>
 
-                                <tr>
+                            <tr>
 
-                                    <td>
+                                <td>
 
-                                        <span class="number-badge">
+                                    <input
+                                        type="checkbox"
+                                        class="history-checkbox"
+                                        name="history_ids[]"
+                                        value="<?= e(
+                                                    $item['id'] ?? ''
+                                                ) ?>"
+                                        onchange="updateBulkDeleteBtn()">
 
-                                            <?= $rowNumber++ ?>
+                                </td>
 
-                                        </span>
+                                <td>
 
-                                    </td>
+                                    <span class="number-badge">
+
+                                        <?= $rowNumber++ ?>
+
+                                    </span>
+
+                                </td>
 
 
                                     <td>
@@ -1567,10 +2255,33 @@ if (
 
     <script>
         /*
-|--------------------------------------------------------------------------
-| Swap Units
-|--------------------------------------------------------------------------
-*/
+        |--------------------------------------------------------------------------
+        | Mode Toggle
+        |--------------------------------------------------------------------------
+        */
+
+        function setMode(mode) {
+            const hidden =
+                document.getElementById('conversion_mode');
+
+            if (hidden) {
+                hidden.value = mode;
+            }
+
+            document.querySelectorAll('.mode-btn').forEach(function(btn) {
+                btn.classList.toggle(
+                    'active',
+                    btn.dataset.mode === mode
+                );
+            });
+        }
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | Swap Units
+        |--------------------------------------------------------------------------
+        */
 
         function swapUnits() {
             const from =
@@ -1602,6 +2313,46 @@ if (
                     );
 
                 }, 350);
+            }
+        }
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | Presets
+        |--------------------------------------------------------------------------
+        */
+
+        function applyPreset(value, from, to) {
+            const valueInput =
+                document.getElementById('value');
+
+            const fromSelect =
+                document.getElementById('from_unit');
+
+            const toSelect =
+                document.getElementById('to_unit');
+
+            if (valueInput) {
+                valueInput.value = value;
+            }
+
+            if (fromSelect) {
+                fromSelect.value = from;
+            }
+
+            if (toSelect) {
+                toSelect.value = to;
+            }
+
+            const form =
+                document.getElementById('converterForm');
+
+            if (form) {
+                form.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'center'
+                });
             }
         }
 
@@ -1670,6 +2421,247 @@ if (
         }
 
 
+        function handleFileSelect(input) {
+            if (input.files.length > 0) {
+                updateUploadLabel(input.files[0].name);
+            }
+        }
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | Drag and Drop File Upload
+        |--------------------------------------------------------------------------
+        */
+
+        function setupDragDrop() {
+            const area =
+                document.getElementById('uploadArea');
+
+            if (!area) {
+                return;
+            }
+
+            const fileInput =
+                document.getElementById('file');
+
+            area.addEventListener('dragover', function(e) {
+                e.preventDefault();
+                area.classList.add('drag-over');
+            });
+
+            area.addEventListener('dragleave', function(e) {
+                e.preventDefault();
+                area.classList.remove('drag-over');
+            });
+
+            area.addEventListener('drop', function(e) {
+                e.preventDefault();
+                area.classList.remove('drag-over');
+
+                if (e.dataTransfer.files.length > 0) {
+                    fileInput.files = e.dataTransfer.files;
+                    updateUploadLabel(e.dataTransfer.files[0].name);
+                }
+            });
+
+            if (fileInput) {
+                fileInput.addEventListener('change', function() {
+                    if (this.files.length > 0) {
+                        updateUploadLabel(this.files[0].name);
+                    }
+                });
+            }
+        }
+
+        function updateUploadLabel(name) {
+            const area =
+                document.getElementById('uploadArea');
+
+            if (!area) {
+                return;
+            }
+
+            const h3 = area.querySelector('h3');
+
+            if (h3) {
+                h3.textContent = name;
+            }
+        }
+
+        function handleFileSelect(input) {
+            if (input.files.length > 0) {
+                updateUploadLabel(input.files[0].name);
+            }
+        }
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | Bulk Delete
+        |--------------------------------------------------------------------------
+        */
+
+        function toggleSelectAll(checkbox) {
+            const checkboxes =
+                document.querySelectorAll('.history-checkbox');
+
+            checkboxes.forEach(function(cb) {
+                cb.checked = checkbox.checked;
+            });
+
+            updateBulkDeleteBtn();
+        }
+
+        function updateBulkDeleteBtn() {
+            const btn =
+                document.getElementById('bulkDeleteBtn');
+
+            const checkboxes =
+                document.querySelectorAll('.history-checkbox:checked');
+
+            if (btn) {
+                btn.disabled = checkboxes.length === 0;
+            }
+        }
+
+        function confirmBulkDelete() {
+            const checkboxes =
+                document.querySelectorAll('.history-checkbox:checked');
+
+            if (checkboxes.length === 0) {
+                return false;
+            }
+
+            return confirm(
+                'Delete ' + checkboxes.length + ' selected record(s)?'
+            );
+        }
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | LocalStorage History Sync
+        |--------------------------------------------------------------------------
+        */
+
+        function syncHistoryToStorage() {
+            const data = <?= json_encode($history ?? []) ?>;
+
+            try {
+                localStorage.setItem(
+                    'conversion_history',
+                    JSON.stringify(data)
+                );
+            } catch (e) {
+                // ignore storage errors
+            }
+        }
+
+        function loadHistoryFromStorage() {
+            try {
+                const raw =
+                    localStorage.getItem('conversion_history');
+
+                if (!raw) {
+                    return [];
+                }
+
+                return JSON.parse(raw);
+            } catch (e) {
+                return [];
+            }
+        }
+
+        function renderLocalStorageHistory() {
+            const history =
+                loadHistoryFromStorage();
+
+            const tbody =
+                document.querySelector('.history-table-body');
+
+            if (!tbody || history.length === 0) {
+                return;
+            }
+
+            const existingRows =
+                tbody.querySelectorAll('tr');
+
+            if (existingRows.length > 0) {
+                return;
+            }
+
+            const emptyState =
+                document.querySelector('.empty-state');
+
+            if (emptyState) {
+                emptyState.style.display = 'none';
+            }
+
+            tbody.innerHTML = '';
+
+            history.forEach(function(item, index) {
+                const row = document.createElement('tr');
+
+                row.innerHTML = '\
+                        <td>\
+                            <input\
+                                type="checkbox"\
+                                class="history-checkbox"\
+                                name="history_ids[]"\
+                                value="' + escapeHtml(item.id || '') + '"\
+                                onchange="updateBulkDeleteBtn()">\
+                        </td>\
+                        <td>\
+                            <span class="number-badge">' + (index + 1) + '</span>\
+                        </td>\
+                        <td>\
+                            <strong>' + escapeHtml(item.value || '') + '</strong>\
+                            <span class="unit-text">' + escapeHtml(item.from || '') + '</span>\
+                        </td>\
+                        <td>\
+                            <span class="result-pill">' + escapeHtml(item.result || '') + ' ' + escapeHtml(item.to || '') + '</span>\
+                        </td>\
+                        <td>\
+                            <span class="date-text">\
+                                🕒\
+                                ' + escapeHtml(item.created_at || '') + '\
+                            </span>\
+                        </td>\
+                        <td>\
+                            <form\
+                                method="POST"\
+                                onsubmit="return confirm(\'Delete this record?\');">\
+                                <input\
+                                    type="hidden"\
+                                    name="csrf_token"\
+                                    value="<?= e($_SESSION['csrf_token']) ?>">\
+                                <input\
+                                    type="hidden"\
+                                    name="history_id"\
+                                    value="' + escapeHtml(item.id || '') + '">\
+                                <button\
+                                    type="submit"\
+                                    name="delete_history"\
+                                    class="delete-btn"\
+                                    title="Delete record">\
+                                    🗑️\
+                                </button>\
+                            </form>\
+                        </td>\
+                    ';
+
+                tbody.appendChild(row);
+            });
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+
         /*
         |--------------------------------------------------------------------------
         | Dark Mode
@@ -1730,6 +2722,19 @@ if (
                     'Dark';
             }
         }
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | Init
+        |--------------------------------------------------------------------------
+        */
+
+        document.addEventListener('DOMContentLoaded', function() {
+            setupDragDrop();
+            syncHistoryToStorage();
+            renderLocalStorageHistory();
+        });
     </script>
 
 
